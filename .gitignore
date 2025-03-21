@@ -33,3 +33,4 @@
 .DS_Store
 AtaraxiaSDK
 database/SDLDatabase.db
+*.db
