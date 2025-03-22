@@ -19,6 +19,8 @@ This is a barebones approach to windowing via SDL3.
 //App headers
 #include "SDLColors.h"
 #include "videoRendering.h"
+#include "gameScores.h"
+#include "screenScenes.h"
 
 extern "C" {
     #include <libavcodec/avcodec.h>
@@ -39,8 +41,10 @@ extern "C" void cocoaBaseMenuBar();
 extern "C" void openSDLWindowAboutMenu();
 
 bool init();
+bool initMP4(const std::string &filename, VideoState &video);
 bool initAudio(VideoState &video);
 void render();
+SDL_Texture* getNextFrame(VideoState &video, SDL_Renderer* renderer);
 void renderText(const char* message, int x, int y, SDL_Color color);
 void handleEvents(bool& done);
 void close();
@@ -105,6 +109,20 @@ bool init() {
     return true;
 }
 
+bool initMP4(const std::string &filename, VideoState &video) 
+{
+    if (loadMP4(filename, video)) {
+        std::cout << "MP4 file loaded successfully: " << filename << std::endl;
+        std::cout << "Video Stream Index: " << video.videoStream << std::endl;
+        std::cout << "Codec: " << video.pCodec->name << std::endl;
+        std::cout << "Resolution: " << video.pCodecCtx->width << "x" << video.pCodecCtx->height << std::endl;
+        return true;
+    } else {
+        std::cerr << "Failed to load MP4 file: " << filename << std::endl;
+        return false;
+    }
+}
+
 bool initAudio(VideoState &video) {
     SDL_AudioSpec wantedSpec, obtainedSpec;
     SDL_zero(wantedSpec); 
@@ -134,7 +152,7 @@ void render() {
     
     if (!audioInitialized && !attemptedAudioInit) {
         attemptedAudioInit = true; // Mark that we've tried, regardless of success
-        std::string audioPath = "assets/video/CatSpin.wav";
+        std::string audioPath = "assets/audio/blip.wav";
         SDL_Log("Attempting to load audio from: %s", audioPath.c_str());
         if (loadAudioFile(audioPath)) {
             SDL_Log("Audio file loaded successfully, attempting playback...");
@@ -145,6 +163,91 @@ void render() {
             SDL_Log("Failed to initialize audio device. Will not retry.");
         }
     }
+}
+SDL_Texture* getNextFrame(VideoState &video, SDL_Renderer* renderer) 
+{
+    if (!video.pFormatCtx || !video.pCodecCtx) return nullptr;
+    AVPacket packet;
+    AVFrame *frame = av_frame_alloc();
+    while (av_read_frame(video.pFormatCtx, &packet) >= 0) {
+        if (packet.stream_index == video.videoStream) {
+            avcodec_send_packet(video.pCodecCtx, &packet);
+            if (avcodec_receive_frame(video.pCodecCtx, frame) == 0) {
+                if (!video.swsCtx) {
+                    video.swsCtx = sws_getContext(
+                        video.pCodecCtx->width, video.pCodecCtx->height,
+                        video.pCodecCtx->pix_fmt,
+                        video.pCodecCtx->width, video.pCodecCtx->height,
+                        AV_PIX_FMT_RGB24,
+                        SWS_BILINEAR, nullptr, nullptr, nullptr
+                    );
+                    if (!video.swsCtx) {
+                        std::cerr << "Failed to create SwsContext\n";
+                        av_frame_free(&frame);
+                        av_packet_unref(&packet);
+                        return nullptr;
+                    }
+                }
+                if (!video.pFrameRGB) {
+                    video.pFrameRGB = av_frame_alloc();
+                    int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, video.pCodecCtx->width,
+                                                              video.pCodecCtx->height, 1);
+                    if (numBytes < 0) {
+                        std::cerr << "Failed to calculate buffer size\n";
+                        av_frame_free(&frame);
+                        av_packet_unref(&packet);
+                        return nullptr;
+                    }
+                    video.buffer = (uint8_t*) av_malloc(numBytes * sizeof(uint8_t));
+                    if (!video.buffer) {
+                        std::cerr << "Failed to allocate buffer\n";
+                        av_frame_free(&frame);
+                        av_packet_unref(&packet);
+                        return nullptr;
+                    }
+                    av_image_fill_arrays(video.pFrameRGB->data, video.pFrameRGB->linesize,
+                                         video.buffer, AV_PIX_FMT_RGB24,
+                                         video.pCodecCtx->width, video.pCodecCtx->height, 1);
+                }
+                int ret = sws_scale(
+                    video.swsCtx, frame->data, frame->linesize,
+                    0, video.pCodecCtx->height,
+                    video.pFrameRGB->data, video.pFrameRGB->linesize
+                );
+                if (ret < 0) {
+                    std::cerr << "sws_scale failed\n";
+                    av_frame_free(&frame);
+                    av_packet_unref(&packet);
+                    return nullptr;
+                }
+                SDL_Surface* surface = SDL_CreateSurface(video.pCodecCtx->width, video.pCodecCtx->height, SDL_PIXELFORMAT_RGB24);
+                if (!surface) {
+                    std::cerr << "Failed to create SDL surface: " << SDL_GetError() << std::endl;
+                    av_frame_free(&frame);
+                    av_packet_unref(&packet);
+                    return nullptr;
+                }
+                uint8_t* srcData = video.pFrameRGB->data[0];
+                int srcPitch = video.pFrameRGB->linesize[0];
+                uint8_t* dstData = (uint8_t*)surface->pixels;
+                int dstPitch = surface->pitch;
+                int height = video.pCodecCtx->height;
+                int width = std::min(srcPitch, dstPitch);
+                for (int y = 0; y < height; y++) {
+                    memcpy(dstData + y * dstPitch, srcData + y * srcPitch, width);
+                }
+                // Convert Surface to Texture
+                SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+                SDL_DestroySurface(surface);
+                av_frame_free(&frame);
+                av_packet_unref(&packet);
+                return texture;
+            }
+        }
+        av_packet_unref(&packet);
+    }
+    av_frame_free(&frame);
+    return nullptr;
 }
 
 void renderText(const char* message, int x, int y, SDL_Color color) {
@@ -166,6 +269,7 @@ void renderText(const char* message, int x, int y, SDL_Color color) {
     SDL_RenderTexture(renderer, textTexture, nullptr, &destRect);
     SDL_DestroyTexture(textTexture);
 }
+
 void handleEvents(bool& done)
 {
     SDL_Event event;

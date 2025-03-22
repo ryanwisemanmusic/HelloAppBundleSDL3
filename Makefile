@@ -20,6 +20,10 @@ SDL3_MIXER_LIB := /usr/local/lib
 FFMPEG_INCLUDE := /opt/homebrew/Cellar/ffmpeg/7.1.1_1/include
 FFMPEG_LIB := /opt/homebrew/Cellar/ffmpeg/7.1.1_1/lib
 
+# SQLite Path
+SQLITE_INCLUDE := /opt/homebrew/Cellar/sqlite/3.49.1/include
+SQLITE_LIB := /opt/homebrew/Cellar/sqlite/3.49.1/lib
+
 # Platform libraries
 PLATFORM_LIBS = -framework Cocoa -framework OpenGL -lobjc
 
@@ -28,20 +32,22 @@ HEADER = -isystem $(SDL3_INCLUDE) \
          -I$(SDL3_IMAGE_INCLUDE) \
          -I$(SDL3_TTF_INCLUDE) \
          -I$(FFMPEG_INCLUDE) \
+         -I$(SQLITE_INCLUDE) \
          -Iinclude/cpp_headers \
          -Iinclude/objc_headers \
          -Isrc/objc \
          -Idatabase
 
 # Library flags
-LIB_FLAGS = -L$(SDL3_LIB) -L$(SDL3_IMAGE_LIB) -L$(SDL3_TTF_LIB) -L$(FFMPEG_LIB) \
-            -lSDL3 -lSDL3_image -lSDL3_ttf \
+LIB_FLAGS = -L$(SDL3_LIB) -L$(SDL3_IMAGE_LIB) -L$(SDL3_TTF_LIB) -L$(SDL3_MIXER_LIB) -L$(FFMPEG_LIB) -L$(SQLITE_LIB) \
+            -lSDL3 -lSDL3_image -lSDL3_ttf -lSDL3_mixer \
             -lavcodec -lavformat -lavutil -lswscale -lswresample \
+            -lsqlite3 \
             $(PLATFORM_LIBS)
 
 # Target and sources
 TARGET = AtaraxiaSDK
-SRC_CPP = src/cpp/main.cpp src/cpp/videoRendering.cpp database/SDLColors.cpp
+SRC_CPP = src/cpp/main.cpp src/cpp/videoRendering.cpp src/cpp/screenScenes.cpp database/SDLColors.cpp database/gameScores.cpp
 SRC_OBJC = src/objc/cocoaToolbarUI.mm
 
 # Object files
