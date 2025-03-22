@@ -5,27 +5,26 @@ This is a barebones approach to windowing via SDL3.
 */
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_main.h>
-#include <SDL3/SDL_render.h>
-
-/*Third party image library for SDL3*/
 #include <SDL3_ttf/SDL_ttf.h>
+#include <SDL3/SDL_main.h>
 #include <SDL3_image/SDL_image.h>
-/*Header for SQLite, if you aren't using local
-databases, this can be deleted.*/
+#include <SDL3/SDL_video.h>
+#include <SDL3/SDL_surface.h>
+#include <SDL3/SDL_render.h>
+#include <SDL3/SDL_audio.h>
 #include <sqlite3.h>
-
-//Debug headers
-#include <unistd.h>
-#include <stdio.h>
-
-//Universal libraries
 #include <iostream>
 #include <array>
-#include <stdexcept>
 
 //App headers
 #include "SDLColors.h"
+#include "videoRendering.h"
+
+extern "C" {
+    #include <libavcodec/avcodec.h>
+    #include <libavformat/avformat.h>
+    #include <libswscale/swscale.h>
+}
 
 SDL_Window *window;
 SDL_Renderer *renderer;
@@ -34,17 +33,19 @@ constexpr int ScreenHeight = 600;
 
 TTF_Font* font = nullptr;
 
+bool audioInitialized = false;
+
 extern "C" void cocoaBaseMenuBar();
 extern "C" void openSDLWindowAboutMenu();
 
 bool init();
+bool initAudio(VideoState &video);
 void render();
 void renderText(const char* message, int x, int y, SDL_Color color);
 void handleEvents(bool& done);
 void close();
 
-
-
+//External functions
 
 int main(int argc, char* argv[]) {
     (void)argc; 
@@ -54,6 +55,8 @@ int main(int argc, char* argv[]) {
         SDL_Log("Unable to initialize program!\n");
         return 1;
     }
+
+    cocoaBaseMenuBar();
 
     bool done = false;
 
@@ -72,7 +75,7 @@ int main(int argc, char* argv[]) {
 bool init() {
     // Initialize SDL and TTF
     TTF_Init();
-    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
     
     window = SDL_CreateWindow(
         "AtaraxiaSDK", ScreenWidth,
@@ -102,11 +105,46 @@ bool init() {
     return true;
 }
 
+bool initAudio(VideoState &video) {
+    SDL_AudioSpec wantedSpec, obtainedSpec;
+    SDL_zero(wantedSpec); 
+    wantedSpec.freq = 44100;
+    wantedSpec.format = SDL_AUDIO_S16;
+    wantedSpec.channels = 2;
+    
+    video.audioDevice = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &wantedSpec);
+    if (video.audioDevice == 0) {
+        SDL_Log("Error: Could not open audio device: %s", SDL_GetError());
+        return false;
+    }
+    
+    video.audioSpec = obtainedSpec;
+    SDL_ResumeAudioDevice(video.audioDevice);
+    return true;
+}
+
 void render() {
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderClear(renderer); 
     renderText("Hello World", 180, 250, cMagenta);
     SDL_RenderPresent(renderer);
+
+    // Only try to initialize audio once
+    static bool attemptedAudioInit = false;
+    
+    if (!audioInitialized && !attemptedAudioInit) {
+        attemptedAudioInit = true; // Mark that we've tried, regardless of success
+        std::string audioPath = "assets/video/CatSpin.wav";
+        SDL_Log("Attempting to load audio from: %s", audioPath.c_str());
+        if (loadAudioFile(audioPath)) {
+            SDL_Log("Audio file loaded successfully, attempting playback...");
+            playAudio();
+            audioInitialized = true;
+            SDL_Log("Audio initialized and playing!");
+        } else {
+            SDL_Log("Failed to initialize audio device. Will not retry.");
+        }
+    }
 }
 
 void renderText(const char* message, int x, int y, SDL_Color color) {
@@ -136,7 +174,10 @@ void handleEvents(bool& done)
         if (event.type == SDL_EVENT_QUIT)
         {
             done = true;
+            cleanupAudio();
+            audioInitialized = false;
         }
+        // Don't clean up audio for other events
     }
 }
 
