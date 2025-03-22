@@ -35,3 +35,4 @@ AtaraxiaSDK
 database/SDLDatabase.db
 *.db
 *.wav
+*.mp4
